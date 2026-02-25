@@ -60,3 +60,6 @@ site/.venv/
 
 # python
 __pycache__/
+
+# ralphex progress logs
+.ralphex/worktrees/
