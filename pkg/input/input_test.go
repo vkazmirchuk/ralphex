@@ -28,11 +28,11 @@ func TestTerminalCollector_selectWithNumbers(t *testing.T) {
 		{name: "select last option", question: "Pick one", options: []string{"A", "B", "C"}, input: "3\n", want: "C"},
 		{name: "select middle option", question: "Pick one", options: []string{"A", "B", "C"}, input: "2\n", want: "B"},
 		{name: "input with spaces", question: "Pick one", options: []string{"A", "B"}, input: "  2  \n", want: "B"},
-		{name: "out of range high", question: "Pick one", options: []string{"A", "B"}, input: "5\n", wantErr: "out of range"},
-		{name: "out of range zero", question: "Pick one", options: []string{"A", "B"}, input: "0\n", wantErr: "out of range"},
-		{name: "negative number", question: "Pick one", options: []string{"A", "B"}, input: "-1\n", wantErr: "out of range"},
-		{name: "invalid input", question: "Pick one", options: []string{"A", "B"}, input: "abc\n", wantErr: "invalid number"},
-		{name: "empty input", question: "Pick one", options: []string{"A", "B"}, input: "\n", wantErr: "invalid number"},
+		{name: "out of range high", question: "Pick one", options: []string{"A", "B"}, input: "5\n", wantErr: "invalid input"},
+		{name: "out of range zero", question: "Pick one", options: []string{"A", "B"}, input: "0\n", wantErr: "invalid input"},
+		{name: "negative number", question: "Pick one", options: []string{"A", "B"}, input: "-1\n", wantErr: "invalid input"},
+		{name: "invalid input", question: "Pick one", options: []string{"A", "B"}, input: "abc\n", wantErr: "invalid input"},
+		{name: "empty input", question: "Pick one", options: []string{"A", "B"}, input: "\n", wantErr: "invalid input"},
 		{name: "single option", question: "Only one", options: []string{"OnlyOption"}, input: "1\n", want: "OnlyOption"},
 	}
 
@@ -432,7 +432,7 @@ func TestTerminalCollector_AskDraftReview(t *testing.T) {
 		assert.Empty(t, feedback)
 	})
 
-	t.Run("multiple invalid selections retry then accepts", func(t *testing.T) {
+	t.Run("multiple invalid selections retry then rejects", func(t *testing.T) {
 		var stdout bytes.Buffer
 		// "abc" is not a number, "0" is out of range, "-1" is out of range, then "4" is valid (Reject)
 		reader := &sequentialLineReader{lines: []string{"abc", "0", "-1", "4"}}
