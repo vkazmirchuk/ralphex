@@ -7,6 +7,7 @@ Usage: ralphex-dk.sh [wrapper-flags] [ralphex-args]
 Wrapper-specific flags (parsed by this script):
   -E, --env VAR[=val]        extra env var to pass to container (repeatable)
   -v, --volume src:dst[:opts] extra volume mount (repeatable)
+  --dry-run                  print docker command without executing
   --update                   pull latest Docker image and exit
   --update-script            update this wrapper script and exit
   --test                     run embedded unit tests and exit
@@ -22,6 +23,8 @@ Examples:
   ralphex-dk.sh -v /data:/mnt/data:ro docs/plans/feature.md
   ralphex-dk.sh -E DEBUG=1 -E API_KEY docs/plans/feature.md
   ralphex-dk.sh -E FOO -- -v /ignored:path plan.md   # -v goes to ralphex
+  ralphex-dk.sh --dry-run                            # show docker command
+  ralphex-dk.sh --dry-run -E FOO                     # warns about inherited var
   ralphex-dk.sh --update
   ralphex-dk.sh --update-script
 
@@ -42,6 +45,7 @@ import hashlib
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -121,6 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude-provider", dest="claude_provider", metavar="PROVIDER",
                         choices=VALID_CLAUDE_PROVIDERS,
                         help="claude provider: 'default' or 'bedrock' (env: RALPHEX_CLAUDE_PROVIDER)")
+    parser.add_argument("--dry-run", action="store_true", dest="dry_run",
+                        help="print docker command that would be run, without executing")
     return parser
 
 
@@ -641,6 +647,48 @@ def extract_env_from_flags(extra_env: list[str] | None) -> dict[str, str]:
     return parse_env_flags(extra_env).values
 
 
+def detect_inherited_env_vars(extra_env: list[str]) -> list[str]:
+    """extract var names that use inherit form (no =value) from docker -e flags.
+
+    parses ["-e", "VAR=value", "-e", "VAR2", ...] and returns list of var names
+    that don't have explicit values (just "VAR" without "=").
+    these vars won't work when copying the command to a different shell.
+    """
+    inherited: list[str] = []
+    i = 0
+    while i < len(extra_env):
+        if extra_env[i] == "-e" and i + 1 < len(extra_env):
+            entry = extra_env[i + 1]
+            if "=" not in entry:
+                inherited.append(entry)
+            i += 2
+        else:
+            i += 1
+    return inherited
+
+
+def detect_explicit_secrets(extra_env: list[str]) -> list[str]:
+    """detect env vars with explicit values that have sensitive names.
+
+    parses ["-e", "VAR=value", ...] and returns list of var names where
+    the var has an explicit value AND is_sensitive_name() returns True.
+    used to warn users about secrets in dry-run output.
+    """
+    secrets: list[str] = []
+    i = 0
+    while i < len(extra_env):
+        if extra_env[i] == "-e" and i + 1 < len(extra_env):
+            entry = extra_env[i + 1]
+            if "=" in entry:
+                name = entry.split("=", 1)[0]
+                if is_sensitive_name(name):
+                    secrets.append(name)
+            i += 2
+        else:
+            i += 1
+    return secrets
+
+
 def validate_bedrock_config(extra_env: list[str] | None = None) -> list[str]:
     """validate bedrock configuration and return list of warning messages.
 
@@ -782,8 +830,20 @@ def build_base_env_vars() -> list[str]:
     ]
 
 
-def run_docker(image: str, port: str, volumes: list[str], env_vars: list[str], bind_port: bool, args: list[str]) -> int:
-    """build and execute docker run command."""
+def build_docker_command(
+    image: str,
+    port: str,
+    volumes: list[str],
+    env_vars: list[str],
+    bind_port: bool,
+    args: list[str],
+) -> list[str]:
+    """build docker run command as a list of arguments.
+
+    includes: docker run, interactive flag (-it when stdin is tty), --rm,
+    base env vars, extra env vars, port binding with RALPHEX_WEB_HOST,
+    volumes, workdir, image, entrypoint, and args.
+    """
     cmd = ["docker", "run"]
 
     interactive = sys.stdin.isatty()
@@ -805,6 +865,13 @@ def run_docker(image: str, port: str, volumes: list[str], env_vars: list[str], b
     cmd.extend(["-w", "/workspace"])
     cmd.extend([image, "/srv/ralphex"])
     cmd.extend(args)
+
+    return cmd
+
+
+def run_docker(image: str, port: str, volumes: list[str], env_vars: list[str], bind_port: bool, args: list[str]) -> int:
+    """build and execute docker run command."""
+    cmd = build_docker_command(image, port, volumes, env_vars, bind_port, args)
 
     # defer SIGTERM during Popen+assignment to prevent race where handler sees _active_proc unset.
     # using a deferred handler instead of SIG_IGN so the signal is not lost.
@@ -950,6 +1017,7 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _term_handler)
 
+    dry_run_completed = False
     try:
         # build volumes (base + extra from env var + CLI)
         volumes = build_volumes(creds_temp, claude_home)
@@ -980,15 +1048,35 @@ def main() -> int:
             for warning in bedrock_warnings:
                 print(f"  warning: {warning}", file=sys.stderr)
 
-        # schedule credential cleanup
-        schedule_cleanup(creds_temp)
-
         # determine port binding
         bind_port = should_bind_port(ralphex_args)
 
+        # handle --dry-run: print command without executing
+        if parsed.dry_run:
+            cmd = build_docker_command(image, port, volumes, extra_env, bind_port, ralphex_args)
+            inherited = detect_inherited_env_vars(extra_env)
+            if inherited:
+                print(f"note: inherited env vars ({', '.join(inherited)}) require these variables "
+                      "to be set in your shell when running the command", file=sys.stderr)
+            if creds_temp:
+                print(f"note: credentials extracted to {creds_temp} (delete after use)", file=sys.stderr)
+            explicit_secrets = detect_explicit_secrets(extra_env)
+            if explicit_secrets:
+                print(f"note: output contains explicit values for sensitive vars ({', '.join(explicit_secrets)}); "
+                      "avoid sharing or logging this output", file=sys.stderr)
+            print(shlex.join(cmd))
+            # skip credential cleanup in dry-run mode so command is runnable
+            dry_run_completed = True
+            return 0
+
+        # schedule credential cleanup (only for actual runs)
+        schedule_cleanup(creds_temp)
+
         return run_docker(image, port, volumes, extra_env, bind_port, ralphex_args)
     finally:
-        _cleanup_creds()
+        # only skip cleanup if dry-run completed successfully (user got the file path warning)
+        if not dry_run_completed:
+            _cleanup_creds()
 
 
 def run_tests() -> None:
