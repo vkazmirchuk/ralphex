@@ -485,14 +485,31 @@ func (s *Service) EnsureIgnored(pattern, probePath string) error {
 		s.log.Printf("warning: checking gitignore: %v, adding pattern anyway\n", err)
 	}
 
-	// write to .gitignore at repo root
+	// check if "# ralphex" comment already exists in .gitignore
 	gitignorePath := filepath.Join(s.repo.root(), ".gitignore")
+	hasComment := false
+	if existing, readErr := os.ReadFile(gitignorePath); readErr == nil { //nolint:gosec // .gitignore is world-readable
+		for _, line := range strings.Split(string(existing), "\n") {
+			if strings.TrimSpace(line) == "# ralphex" {
+				hasComment = true
+				break
+			}
+		}
+	}
+
+	// write to .gitignore at repo root
 	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644) //nolint:gosec // .gitignore needs world-readable
 	if err != nil {
 		return fmt.Errorf("open .gitignore: %w", err)
 	}
 
-	if _, err := fmt.Fprintf(f, "\n# ralphex progress logs\n%s\n", pattern); err != nil {
+	var writeErr error
+	if hasComment {
+		_, writeErr = fmt.Fprintf(f, "%s\n", pattern)
+	} else {
+		_, writeErr = fmt.Fprintf(f, "\n# ralphex\n%s\n", pattern)
+	}
+	if writeErr != nil {
 		_ = f.Close() // close on write error, ignore close error since write already failed
 		return fmt.Errorf("write .gitignore: %w", err)
 	}

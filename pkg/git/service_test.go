@@ -634,10 +634,12 @@ func TestService_EnsureIgnored(t *testing.T) {
 		assert.Len(t, log.logs, 1)
 		assert.Contains(t, log.logs[0], ".ralphex/progress/", "log message should contain pattern")
 
-		// verify pattern was added to .gitignore
+		// verify pattern was added to .gitignore with unified comment
 		gitignorePath := filepath.Join(dir, ".gitignore")
 		content, err := os.ReadFile(gitignorePath) //nolint:gosec // test file
 		require.NoError(t, err)
+		assert.Contains(t, string(content), "# ralphex")
+		assert.NotContains(t, string(content), "# ralphex progress logs")
 		assert.Contains(t, string(content), ".ralphex/progress/")
 	})
 
@@ -704,6 +706,32 @@ func TestService_EnsureIgnored(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(content), "*.log")
 		assert.Contains(t, string(content), "*.tmp")
+	})
+
+	t.Run("does not duplicate comment on second call", func(t *testing.T) {
+		dir := setupExternalTestRepo(t)
+		svc, err := NewService(dir, noopServiceLogger())
+		require.NoError(t, err)
+
+		// first call adds comment + pattern
+		err = svc.EnsureIgnored(".ralphex/progress/", ".ralphex/progress/progress-test.txt")
+		require.NoError(t, err)
+
+		gitignorePath := filepath.Join(dir, ".gitignore")
+		content, err := os.ReadFile(gitignorePath) //nolint:gosec // test file
+		require.NoError(t, err)
+		assert.Equal(t, 1, strings.Count(string(content), "# ralphex"), "first call should add comment once")
+		assert.Contains(t, string(content), ".ralphex/progress/")
+
+		// second call with different pattern should not add comment again
+		err = svc.EnsureIgnored(".ralphex/worktrees/", ".ralphex/worktrees/test-branch")
+		require.NoError(t, err)
+
+		content, err = os.ReadFile(gitignorePath) //nolint:gosec // test file
+		require.NoError(t, err)
+		assert.Equal(t, 1, strings.Count(string(content), "# ralphex"), "second call should not duplicate comment")
+		assert.Contains(t, string(content), ".ralphex/progress/")
+		assert.Contains(t, string(content), ".ralphex/worktrees/")
 	})
 }
 
