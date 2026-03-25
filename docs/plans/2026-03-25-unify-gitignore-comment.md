@@ -35,6 +35,6 @@ Replace the duplicated "# ralphex progress logs" comment with a single "# ralphe
 
 ### Task 2: Verify acceptance criteria
 
-- [ ] Run full test suite (`make test`)
-- [ ] Run linter (`make lint`)
-- [ ] Verify test coverage meets 80%+
+- [x] Run full test suite (`make test`)
+- [x] Run linter (`make lint`)
+- [x] Verify test coverage meets 80%+

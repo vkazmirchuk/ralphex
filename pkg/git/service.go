@@ -489,7 +489,7 @@ func (s *Service) EnsureIgnored(pattern, probePath string) error {
 	gitignorePath := filepath.Join(s.repo.root(), ".gitignore")
 	hasComment := false
 	if existing, readErr := os.ReadFile(gitignorePath); readErr == nil { //nolint:gosec // .gitignore is world-readable
-		for _, line := range strings.Split(string(existing), "\n") {
+		for line := range strings.SplitSeq(string(existing), "\n") {
 			if strings.TrimSpace(line) == "# ralphex" {
 				hasComment = true
 				break
